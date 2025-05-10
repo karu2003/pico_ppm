@@ -1,0 +1,66 @@
+// Проверьте правильность программы PIO
+.program ppm
+.side_set 1       
+
+// Используем максимальную частоту RP2040 - 133 МГц (не забудьте выставить set_sys_clock_khz(133000, true) в main)
+.define PUBLIC MIN_INTERVAL 400    // 3 мкс при 133 МГц (если частота ниже — импульс длиннее)
+.define PUBLIC MAX_CODE     1024   // максимальное значение кода
+
+.wrap_target
+    pull block      side 0
+    mov y, osr      side 0
+    pull block      side 0
+    mov x, osr      side 0
+
+    // Стартовый минимальный импульс
+    nop side 1
+    nop side 0
+
+min_delay1:
+    jmp y--, min_delay1 side 0
+
+    pull block      side 0
+    mov y, osr      side 0
+
+code_delay:
+    jmp x--, code_delay side 0
+
+min_delay2:
+    jmp y--, min_delay2 side 0
+
+    // Второй минимальный импульс
+    nop side 1
+    nop side 0
+.wrap
+
+% c-sdk {
+// Инициализация PIO для PPM на максимальной частоте
+static inline void ppm_program_init(PIO pio, uint sm, uint offset, uint pin, float freq) {
+    pio_sm_config c = ppm_program_get_default_config(offset);
+
+    pio_gpio_init(pio, pin);
+    pio_sm_set_consecutive_pindirs(pio, sm, pin, 1, true);
+
+    sm_config_set_set_pins(&c, pin, 1);
+    sm_config_set_sideset_pins(&c, pin);
+    sm_config_set_sideset(&c, 1, false, false);  // 1-bit side-set, optional
+
+    sm_config_set_clkdiv(&c, (float)clock_get_hz(clk_sys) / freq);
+
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+
+
+// Функция для отправки кода PPM
+static inline void send_ppm_code(PIO pio, uint sm, uint32_t code) {
+    // Сначала отправляем константу MIN_INTERVAL
+    pio_sm_put_blocking(pio, sm, ppm_MIN_INTERVAL);
+    
+    // Затем отправляем код
+    pio_sm_put_blocking(pio, sm, code);
+    
+    // И еще раз MIN_INTERVAL для третьего pull
+    pio_sm_put_blocking(pio, sm, ppm_MIN_INTERVAL);
+}
+%}
