@@ -15,8 +15,8 @@
 
 class PPMController {
 public:
-  static constexpr uint16_t FRAME_TIME_US = 15; // Длительность фрейма 15 мкс
-  static constexpr uint16_t MIN_PULSE_PERIOD_US = 3; // минимальный период между импульсами (3 мкс)
+  static constexpr uint16_t FRAME_TIME_US = 15;
+  static constexpr uint16_t MIN_PULSE_PERIOD_US = 3;
 private:
   // Константы
   static constexpr uint8_t PPM_PIN = 0; // GPIO пин для выхода PPM
@@ -31,6 +31,7 @@ private:
   uint sm;
   uint16_t currentCode;          // Текущее значение кода
   absolute_time_t nextFrameTime; // Время следующего фрейма
+  bool testMode;                 // Режим тестирования
 
   // Масштабирование кода для вписывания в 15 мкс фрейм
   uint16_t scaleCodeForFrame(uint16_t code) {
@@ -45,7 +46,7 @@ private:
   }
 
 public:
-  PPMController() : pio(nullptr), sm(0), currentCode(0) {
+  PPMController() : pio(nullptr), sm(0), currentCode(0), testMode(false) {
     // Инициализация времени для регулярной отправки фреймов
     nextFrameTime = get_absolute_time();
   }
@@ -84,19 +85,32 @@ public:
     }
   }
 
-  // Парсинг входной команды остаётся без изменений
+  // Парсинг входной команды - поддерживает C/c и T/t
   bool parseCommand(const std::string &cmd, uint16_t &code) {
-    // Простой формат "C:123" - где C это команда для кода, 123 - значение
-    if (cmd.length() >= 3 && cmd[0] == 'C' && cmd[1] == ':') {
-      try {
-        code = std::stoi(cmd.substr(2));
-        return true;
-      } catch (...) {
-        return false;
+    // Добавляем поддержку однобуквенной команды T/t
+    if (cmd.length() == 1 && (cmd[0] == 'T' || cmd[0] == 't')) {
+      // Переключаем режим тестирования при однобуквенной команде
+      testMode = !testMode;
+      code = testMode ? 1 : 0;
+      return true;
+    }
+    
+    if (cmd.length() >= 3) {
+      // Обработка команды кода: "C:123" или "c:123"
+      if ((cmd[0] == 'C' || cmd[0] == 'c') && cmd[1] == ':') {
+        try {
+          code = std::stoi(cmd.substr(2));
+          return true;
+        } catch (...) {
+          return false;
+        }
       }
     }
     return false;
   }
+
+  // Геттер для режима тестирования
+  bool isTestMode() const { return testMode; }
 
 public:
   uint16_t getCurrentCode() const { return currentCode; }
@@ -106,7 +120,7 @@ public:
 
 int main() {
   // Установить системную частоту 133 МГц для корректной работы PIO
-  set_sys_clock_khz(125000, true); //133000
+  set_sys_clock_khz(133000, true); //133000
 
   // Initialize TinyUSB stack
   board_init();
@@ -126,18 +140,6 @@ int main() {
   // let pico sdk use the CDC interface for std io
   stdio_init_all();
 
-//   // Тестирование GPIO 0 напрямую
-//   gpio_init(0);              // Инициализируем GPIO 0
-//   gpio_set_dir(0, GPIO_OUT); // Настраиваем как выход
-
-//   // Тест пина - мигаем несколько раз
-//   for (int i = 0; i < 10; i++) {
-//     gpio_put(0, 1);
-//     sleep_ms(100);
-//     gpio_put(0, 0);
-//     sleep_ms(100);
-//   }
-
   // Создаем объект контроллера PPM
   PPMController ppmCtrl;
   ppmCtrl.init();
@@ -148,14 +150,17 @@ int main() {
   // main run loop
   absolute_time_t next_frame_time = make_timeout_time_us(PPMController::FRAME_TIME_US);
 
+  // Буфер для накопления команды до нажатия Enter
+  std::string command_buffer;
+  
   while (true) {
     tud_task(); // USB
 
     // Отправка PPM фрейма каждые 15 мкс
-    if (absolute_time_diff_us(get_absolute_time(), next_frame_time) <= 0) {
-        ppmCtrl.sendCode(ppmCtrl.getCurrentCode());
-        next_frame_time = make_timeout_time_us(PPMController::FRAME_TIME_US);
-    }
+    // if (absolute_time_diff_us(get_absolute_time(), next_frame_time) <= 0) {
+    //     ppmCtrl.sendCode(ppmCtrl.getCurrentCode());
+    //     next_frame_time = make_timeout_time_us(PPMController::FRAME_TIME_US);
+    // }
 
     // Остальной код без изменений (светодиод, USB CDC)
     // Неблокирующее мигание светодиодом
@@ -171,29 +176,61 @@ int main() {
         uint32_t count = tud_cdc_read(buf, sizeof(buf));
 
         if (count > 0) {
-          buf[count] = 0; // Null-терминатор
-
-          // Эхо данных
+          // Эхо данных (оставляем как есть)
           tud_cdc_write(buf, count);
           tud_cdc_write_flush();
 
-          // Парсим команду
-          uint16_t code;
-          std::string cmdStr(reinterpret_cast<char *>(buf));
-          if (ppmCtrl.parseCommand(cmdStr, code)) {
-            ppmCtrl.sendCode(code);
-
-            // Подтверждение отправки кода
-            std::string response =
-                "PPM code sent: " + std::to_string(code) + "\r\n";
-            tud_cdc_write(response.c_str(), response.length());
-            tud_cdc_write_flush();
+          // Проходим по всем полученным символам
+          for (uint32_t i = 0; i < count; i++) {
+            char c = static_cast<char>(buf[i]);
+            
+            // Проверяем, нажат ли Enter
+            if (c == '\r' || c == '\n') {
+              // Обрабатываем команду, если буфер не пустой
+              if (!command_buffer.empty()) {
+                uint16_t code;
+                if (ppmCtrl.parseCommand(command_buffer, code)) {
+                  // Проверяем, была ли это команда T
+                  if (command_buffer[0] == 'T' || command_buffer[0] == 't') {
+                    std::string mode = ppmCtrl.isTestMode() ? "включен" : "выключен";
+                    std::string response = "\r\nРежим тестирования " + mode + "\r\n";
+                    tud_cdc_write(response.c_str(), response.length());
+                    tud_cdc_write_flush();
+                  } else {
+                    // Обычная команда кода
+                    ppmCtrl.sendCode(code);
+                    std::string response = "\r\nPPM code sent: " + std::to_string(code) + "\r\n";
+                    tud_cdc_write(response.c_str(), response.length());
+                    tud_cdc_write_flush();
+                  }
+                } else {
+                  // Если команда не распознана
+                  std::string error = "\r\nНераспознанная команда: " + command_buffer + "\r\n";
+                  tud_cdc_write(error.c_str(), error.length());
+                  tud_cdc_write_flush();
+                }
+                
+                // Очищаем буфер после обработки команды
+                command_buffer.clear();
+              }
+            } 
+            else if (c == 127 || c == 8) {
+              // Обработка Backspace или Delete
+              if (!command_buffer.empty()) {
+                command_buffer.pop_back();
+              }
+            }
+            else {
+              // Добавляем символ в буфер
+              command_buffer.push_back(c);
+            }
           }
         }
       }
     } else {
       // Небольшая пауза при отсутствии подключения
       sleep_ms(10);
+      command_buffer.clear(); // Очистить буфер, если соединение пропало
     }
   }
 
