@@ -5,7 +5,7 @@ def decompose_cycles(n, max_val=32):
     best_error = float('inf')
     best_combo = None
 
-    for a in range(1, max_val + 1):          # Внешний цикл
+    for a in range(0, max_val + 1):          # Внешний цикл
         for b in range(1, max_val + 1):      # Внутренний цикл
             for c in range(0, 32):           # Остаточные такты: строго 5 бит → [0, 31]
                 total = a * b + c
@@ -34,6 +34,13 @@ for n in range(N):
     rem_list.append(c)
     reconstructed.append(total)
     errors.append(total - n)
+
+print("\nГраничные случаи:")
+test_values = [0, 31, 32, 63, 64, 511, 512, 1023]
+for tc in test_values:
+    (a, b, c), err = decompose_cycles(tc)
+    total = a * b + c
+    print(f"{tc:11d} | {a:10d} | {b:10d} | {c:10d} | {err:10d} | {total:12d}")
 
 # Графики
 plt.figure(figsize=(14, 8))
