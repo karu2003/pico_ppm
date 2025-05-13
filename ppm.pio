@@ -1,40 +1,48 @@
-// Проверьте правильность программы PIO
+// PPM программа с двумя вложенными циклами для точной задержки
 .program ppm
-.side_set 1       
+.side_set 1
 
-// Используем максимальную частоту RP2040 - 133 МГц (не забудьте выставить set_sys_clock_khz(133000, true) в main)
-.define PUBLIC MIN_INTERVAL 400    // 3 мкс при 133 МГц (если частота ниже — импульс длиннее)
+// Константы для PIO программы
+.define PUBLIC MIN_INTERVAL 400    // 3 мкс при 133 МГц
 .define PUBLIC MAX_CODE     1024   // максимальное значение кода
 
 .wrap_target
-    pull block      side 0
-    mov y, osr      side 0
-    pull block      side 0
+    pull block      side 0  // Внешний счетчик для мин. задержки
     mov x, osr      side 0
+    pull block      side 0  // Внутренний счетчик для мин. задержки
+    mov isr, osr    side 0  // Сохраняем во внутреннем регистре ISR
 
-    // Стартовый минимальный импульс
+    // Первый импульс
     nop side 1
     nop side 0
 
-min_delay1:
-    jmp y--, min_delay1 side 0
+    // Минимальная задержка (3 мкс) - двойной цикл
+outer_loop1:
+    mov y, isr      side 0  // Восстановить внутренний счетчик
+inner_loop1:
+    jmp y--, inner_loop1 side 0  // Внутренний цикл (до 31)
+    jmp x--, outer_loop1 side 0  // Внешний цикл
 
-    pull block      side 0
-    mov y, osr      side 0
+    // Получаем значения для кода
+    pull block      side 0  // Внешний счетчик для значения кода
+    mov x, osr      side 0
+    pull block      side 0  // Внутренний счетчик для значения кода
+    mov isr, osr    side 0
 
-code_delay:
-    jmp x--, code_delay side 0
+    // Задержка для кодового значения
+outer_loop2:
+    mov y, isr      side 0  // Восстановить внутренний счетчик
+inner_loop2:
+    jmp y--, inner_loop2 side 0  // Внутренний цикл
+    jmp x--, outer_loop2 side 0  // Внешний цикл
 
-min_delay2:
-    jmp y--, min_delay2 side 0
-
-    // Второй минимальный импульс
+    // Второй импульс
     nop side 1
     nop side 0
 .wrap
 
 % c-sdk {
-// Инициализация PIO для PPM на максимальной частоте
+// Инициализация PIO для PPM
 static inline void ppm_program_init(PIO pio, uint sm, uint offset, uint pin, float freq) {
     pio_sm_config c = ppm_program_get_default_config(offset);
 
@@ -45,22 +53,49 @@ static inline void ppm_program_init(PIO pio, uint sm, uint offset, uint pin, flo
     sm_config_set_sideset_pins(&c, pin);
     sm_config_set_sideset(&c, 1, false, false);  // 1-bit side-set, optional
 
+    // Установить делитель частоты для PIO
     sm_config_set_clkdiv(&c, (float)clock_get_hz(clk_sys) / freq);
 
+    // Настройка FIFO для более эффективной передачи
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
+
+    // Применение конфигурации и запуск
     pio_sm_init(pio, sm, offset, &c);
     pio_sm_set_enabled(pio, sm, true);
 }
 
+// Структура для хранения разделенных счетчиков циклов
+typedef struct {
+    uint32_t outer_count;    // Внешний счетчик
+    uint32_t inner_count;    // Внутренний счетчик (0-31)
+} cycle_counter_t;
 
-// Функция для отправки кода PPM
-static inline void send_ppm_code(PIO pio, uint sm, uint32_t code) {
-    // Сначала отправляем константу MIN_INTERVAL
-    pio_sm_put_blocking(pio, sm, ppm_MIN_INTERVAL);
+// Функция для разделения циклов на внешний и внутренний счетчики
+static inline cycle_counter_t split_cycles(uint32_t total_cycles) {
+    cycle_counter_t result;
+    const uint32_t max_inner = 31;  // Максимальное значение для 5-битного регистра
     
-    // Затем отправляем код
-    pio_sm_put_blocking(pio, sm, code);
+    result.outer_count = total_cycles / (max_inner + 1);
+    result.inner_count = total_cycles % (max_inner + 1);
     
-    // И еще раз MIN_INTERVAL для третьего pull
-    pio_sm_put_blocking(pio, sm, ppm_MIN_INTERVAL);
+    return result;
+}
+
+// Функция для отправки PPM кода с правильным разделением циклов
+static inline void send_ppm_code(PIO pio, uint sm, uint32_t min_gap_cycles, uint32_t code_cycles) {
+    // Разделяем минимальную задержку на внешний и внутренний счетчики
+    cycle_counter_t min_delay = split_cycles(min_gap_cycles);
+    
+    // Разделяем кодовую задержку на внешний и внутренний счетчики
+    cycle_counter_t code_delay = split_cycles(code_cycles);
+    
+    // Отправляем значения в FIFO PIO
+    // 1. Минимальная задержка (3 мкс)
+    pio_sm_put_blocking(pio, sm, min_delay.outer_count);
+    pio_sm_put_blocking(pio, sm, min_delay.inner_count);
+    
+    // 2. Кодовая задержка
+    pio_sm_put_blocking(pio, sm, code_delay.outer_count);
+    pio_sm_put_blocking(pio, sm, code_delay.inner_count);
 }
 %}
