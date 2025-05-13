@@ -16,8 +16,8 @@
 outer_loop1:
     mov y, isr      side 0  // Восстановить внутренний счетчик
 inner_loop1:
-    jmp y--, inner_loop1 side 0  // Внутренний цикл (до 31)
-    jmp x--, outer_loop1 side 0  // Внешний цикл
+    jmp y--, inner_loop1 side 0  // Внутренний цикл (до 31) Y < 0, выходим из цикла
+    jmp x--, outer_loop1 side 0  // Внешний цикл X < 0, выходим из цикла
 
     // Получаем значения для кода
     pull block      side 0  // Внешний счетчик для значения кода

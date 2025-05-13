@@ -26,7 +26,7 @@ public:
 private:
   // Константы
   static constexpr uint8_t PPM_PIN = 0; // GPIO пин для выхода PPM
-  static constexpr uint16_t IMPULSE_CYCLES = 4; // 4 цикла на два импульса (2 nop для каждого)
+  static constexpr uint16_t IMPULSE_CYCLES = 1; // 4 цикла на два импульса (2 nop для каждого)
 
   // Переменные для PIO
   PIO pio;
