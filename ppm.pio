@@ -2,10 +2,6 @@
 .program ppm
 .side_set 1
 
-// Константы для PIO программы
-.define PUBLIC MIN_INTERVAL 400    // 3 мкс при 133 МГц
-.define PUBLIC MAX_CODE     1024   // максимальное значение кода
-
 .wrap_target
     pull block      side 0  // Внешний счетчик для мин. задержки
     mov x, osr      side 0

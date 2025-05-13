@@ -37,6 +37,11 @@ private:
   int8_t testDirection;          // Направление изменения в тестовом режиме (1 или -1)
   uint32_t testOutputCounter;    // Счетчик для периодического вывода статистики
 
+  // Добавляем переменные для управления скоростью обновления и статистикой
+  uint32_t testUpdateCounter;    // Счетчик для периодического обновления кода
+  float testUpdatePeriodSeconds; // Период обновления кода в секундах
+  bool enableStats;              // Флаг включения статистики
+  
   // Масштабирование кода для вписывания в фрейм в обычном режиме
   uint16_t scaleCodeForFrame(uint16_t code) {
     // Максимальное количество циклов для кода при 15 мкс фрейме
@@ -65,7 +70,8 @@ private:
 
 public:
   PPMController() : pio(nullptr), sm(0), currentCode(0), testMode(false), 
-                    testDirection(1), testOutputCounter(0) {
+                    testDirection(1), testOutputCounter(0), 
+                    testUpdateCounter(0), testUpdatePeriodSeconds(0.1f), enableStats(false) {
     // Инициализация времени для регулярной отправки фреймов
     nextFrameTime = get_absolute_time();
   }
@@ -107,18 +113,28 @@ public:
     if (absolute_time_diff_us(get_absolute_time(), nextFrameTime) <= 0) {
       // В режиме тестирования имитируем логику из audio_ppm.c
       if (testMode) {
-        // Обновляем код для демонстрации, как в audio_ppm.c
-        currentCode += testDirection;
+        // Увеличиваем счётчик обновлений
+        testUpdateCounter++;
         
-        // Изменение направления при достижении границ
-        if (currentCode >= 1023) {
-          testDirection = -1;
-        } else if (currentCode <= 1) {
-          testDirection = 1;
+        // Расчет количества отсчетов, соответствующих заданному периоду
+        uint32_t samplesPerUpdate = (uint32_t)(testUpdatePeriodSeconds * AUDIO_SAMPLE_RATE);
+        
+        // Обновляем код после накопления нужного количества отсчетов
+        if (testUpdateCounter >= samplesPerUpdate) {
+          // Обновляем код
+          currentCode += testDirection;
+          testUpdateCounter = 0;
+          
+          // Изменение направления при достижении границ
+          if (currentCode >= 1023) {
+            testDirection = -1;
+          } else if (currentCode <= 1) {
+            testDirection = 1;
+          }
         }
         
-        // Выводим статистику каждые 100 обновлений (или другое значение)
-        if (++testOutputCounter % 100 == 0) {
+        // Выводим статистику, только если она включена
+        if (enableStats && (++testOutputCounter % 100 == 0)) {
           uint32_t min_gap_cycles = MIN_INTERVAL_CYCLES;
           uint32_t code_cycles = calculateTestModeDelay(currentCode);
           
@@ -149,20 +165,40 @@ public:
     }
   }
 
-  // Парсинг входной команды - поддерживает C/c и T/t
+  // Парсинг входной команды - поддерживает C/c и T/t и новые команды
   bool parseCommand(const std::string &cmd, uint16_t &code) {
     // Команда тест (T/t)
     if (cmd.length() == 1 && (cmd[0] == 'T' || cmd[0] == 't')) {
       testMode = !testMode;
       
       if (testMode) {
-        // При включении тестового режима сбросить счетчик
+        // При включении тестового режима сбросить счетчики
         currentCode = 0;
         testDirection = 1;
+        testUpdateCounter = 0;
       }
       
       code = testMode ? 1 : 0;
       return true;
+    }
+    
+    // Команда включения/выключения статистики (S/s)
+    if (cmd.length() == 1 && (cmd[0] == 'S' || cmd[0] == 's')) {
+      enableStats = !enableStats;
+      code = enableStats ? 1 : 0;
+      return true;
+    }
+    
+    // Команда установки периода обновления в секундах (P:число или p:число)
+    if (cmd.length() >= 3 && (cmd[0] == 'P' || cmd[0] == 'p') && cmd[1] == ':') {
+      try {
+        float period = std::stof(cmd.substr(2));
+        setTestUpdatePeriod(period);
+        code = 0;
+        return true;
+      } catch (...) {
+        return false;
+      }
     }
     
     // Обработка команды кода (C:число или c:число)
@@ -177,10 +213,21 @@ public:
     
     return false;
   }
+  
+  // Установка периода обновления кода в тестовом режиме (в секундах)
+  void setTestUpdatePeriod(float seconds) {
+    if (seconds > 0.01f) {  // Минимальный период 10 мс
+      testUpdatePeriodSeconds = seconds;
+      // Сбрасываем счетчик при изменении периода
+      testUpdateCounter = 0;
+    }
+  }
 
   // Геттеры
   bool isTestMode() const { return testMode; }
   uint16_t getCurrentCode() const { return currentCode; }
+  float getTestUpdatePeriod() const { return testUpdatePeriodSeconds; }
+  bool isStatsEnabled() const { return enableStats; }
 };
 
 #define LED_TIME 500
@@ -259,6 +306,20 @@ int main() {
                     tud_cdc_write(response.c_str(), response.length());
                     tud_cdc_write_flush();
                   } 
+                  else if (command_buffer[0] == 'S' || command_buffer[0] == 's') {
+                    // Команда включения/выключения статистики
+                    std::string mode = ppmCtrl.isStatsEnabled() ? "включена" : "выключена";
+                    std::string response = "\r\nСтатистика " + mode + "\r\n";
+                    tud_cdc_write(response.c_str(), response.length());
+                    tud_cdc_write_flush();
+                  }
+                  else if (command_buffer[0] == 'P' || command_buffer[0] == 'p') {
+                    // Команда установки периода обновления
+                    std::string response = "\r\nПериод обновления установлен: " + 
+                                          std::to_string(ppmCtrl.getTestUpdatePeriod()) + " сек\r\n";
+                    tud_cdc_write(response.c_str(), response.length());
+                    tud_cdc_write_flush();
+                  }
                   else {
                     // Обычная команда кода
                     ppmCtrl.sendCode(code);
