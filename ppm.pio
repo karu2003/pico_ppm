@@ -1,44 +1,17 @@
-// PPM программа с двумя вложенными циклами для точной задержки
+// Минимальная PIO-программа для формирования одиночного короткого импульса PPM
 .program ppm
 .side_set 1
 
 .wrap_target
-    pull block      side 0  // Внешний счетчик для мин. задержки
-    mov x, osr      side 0
-    pull block      side 0  // Внутренний счетчик для мин. задержки
-    mov isr, osr    side 0  // Сохраняем во внутреннем регистре ISR
-
-    // Первый импульс
-    nop side 1
-    nop side 0
-
-    // Минимальная задержка (3 мкс) - двойной цикл
-outer_loop1:
-    mov y, isr      side 0  // Восстановить внутренний счетчик
-inner_loop1:
-    jmp y--, inner_loop1 side 0  // Внутренний цикл (до 31) Y < 0, выходим из цикла
-    jmp x--, outer_loop1 side 0  // Внешний цикл X < 0, выходим из цикла
-
-    // Получаем значения для кода
-    pull block      side 0  // Внешний счетчик для значения кода
-    mov x, osr      side 0
-    pull block      side 0  // Внутренний счетчик для значения кода
-    mov isr, osr    side 0
-
-    // Задержка для кодового значения
-outer_loop2:
-    mov y, isr      side 0  // Восстановить внутренний счетчик
-inner_loop2:
-    jmp y--, inner_loop2 side 0  // Внутренний цикл
-    jmp x--, outer_loop2 side 0  // Внешний цикл
-
-    // Второй импульс
-    nop side 1
-    nop side 0
+    // Ждем команду (pull) для формирования импульса
+    pull block      side 0
+    // Первый короткий импульс
+    nop             side 1
+    nop             side 0
 .wrap
 
 % c-sdk {
-// Инициализация PIO для PPM
+// Инициализация PIO для PPM (без изменений)
 static inline void ppm_program_init(PIO pio, uint sm, uint offset, uint pin, float freq) {
     pio_sm_config c = ppm_program_get_default_config(offset);
 
@@ -60,38 +33,8 @@ static inline void ppm_program_init(PIO pio, uint sm, uint offset, uint pin, flo
     pio_sm_set_enabled(pio, sm, true);
 }
 
-// Структура для хранения разделенных счетчиков циклов
-typedef struct {
-    uint32_t outer_count;    // Внешний счетчик
-    uint32_t inner_count;    // Внутренний счетчик (0-31)
-} cycle_counter_t;
-
-// Функция для разделения циклов на внешний и внутренний счетчики
-static inline cycle_counter_t split_cycles(uint32_t total_cycles) {
-    cycle_counter_t result;
-    const uint32_t max_inner = 31;  // Максимальное значение для 5-битного регистра
-    
-    result.outer_count = total_cycles / (max_inner + 1);
-    result.inner_count = total_cycles % (max_inner + 1);
-    
-    return result;
-}
-
-// Функция для отправки PPM кода с правильным разделением циклов
-static inline void send_ppm_code(PIO pio, uint sm, uint32_t min_gap_cycles, uint32_t code_cycles) {
-    // Разделяем минимальную задержку на внешний и внутренний счетчики
-    cycle_counter_t min_delay = split_cycles(min_gap_cycles);
-    
-    // Разделяем кодовую задержку на внешний и внутренний счетчики
-    cycle_counter_t code_delay = split_cycles(code_cycles);
-    
-    // Отправляем значения в FIFO PIO
-    // 1. Минимальная задержка (3 мкс)
-    pio_sm_put_blocking(pio, sm, min_delay.outer_count);
-    pio_sm_put_blocking(pio, sm, min_delay.inner_count);
-    
-    // 2. Кодовая задержка
-    pio_sm_put_blocking(pio, sm, code_delay.outer_count);
-    pio_sm_put_blocking(pio, sm, code_delay.inner_count);
+// Отправка одиночного импульса (теперь просто отправляем любое значение для запуска)
+static inline void send_ppm_pulse(PIO pio, uint sm) {
+    pio_sm_put_blocking(pio, sm, 0);
 }
 %}

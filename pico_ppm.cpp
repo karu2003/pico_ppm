@@ -5,192 +5,90 @@
 
 #include "hardware/clocks.h"
 #include "hardware/pio.h"
+#include "hardware/timer.h"
 #include "pico/stdlib.h"
 #include <bsp/board_api.h>
 #include <pico/stdio.h>
 #include <tusb.h>
 
-// Подключаем сгенерированный заголовочный файл для PIO
 #include "ppm.pio.h"
 
+#define LED_TIME 500
 class PPMController {
 public:
-  static constexpr uint16_t FRAME_TIME_US = 15;
-  // Константы с компенсацией накладных расходов
   static constexpr uint16_t MIN_PULSE_PERIOD_US = 3;
   static constexpr float PIO_FREQ = 133000000.0f;
-  // Добавляем компенсацию ~42-45 циклов 
-  static constexpr uint16_t MIN_INTERVAL_CYCLES = (MIN_PULSE_PERIOD_US * 133) + 45;
-  static constexpr uint32_t AUDIO_SAMPLE_RATE = 48000; // 48 кГц для тестового режима
-  static constexpr uint32_t AUDIO_FRAME_TIME_US = 1000000 / AUDIO_SAMPLE_RATE; // ~20.83 мкс
-private:
-  // Константы
-  static constexpr uint8_t PPM_PIN = 0; // GPIO пин для выхода PPM
-  static constexpr uint16_t IMPULSE_CYCLES = 1; // 4 цикла на два импульса (2 nop для каждого)
+  static constexpr uint16_t MIN_INTERVAL_CYCLES = MIN_PULSE_PERIOD_US * 133;
+  static constexpr uint32_t AUDIO_SAMPLE_RATE = 48000;
+  static constexpr uint32_t AUDIO_FRAME_TIME_US = 1000000 / AUDIO_SAMPLE_RATE;
 
-  // Переменные для PIO
+private:
+  static constexpr uint8_t PPM_PIN = 0;
+
   PIO pio;
   uint sm;
-  uint16_t currentCode;          // Текущее значение кода
-  absolute_time_t nextFrameTime; // Время следующего фрейма
-  bool testMode;                 // Режим тестирования
-  int8_t testDirection;          // Направление изменения в тестовом режиме (1 или -1)
-  uint32_t testOutputCounter;    // Счетчик для периодического вывода статистики
-
-  // Добавляем переменные для управления скоростью обновления и статистикой
-  uint32_t testUpdateCounter;    // Счетчик для периодического обновления кода
-  float testUpdatePeriodSeconds; // Период обновления кода в секундах
-  bool enableStats;              // Флаг включения статистики
-  
-  // Масштабирование кода для вписывания в фрейм в обычном режиме
-  uint16_t scaleCodeForFrame(uint16_t code) {
-    // Максимальное количество циклов для кода при 15 мкс фрейме
-    static constexpr uint32_t MAX_CODE_CYCLES = (FRAME_TIME_US * 133) - 
-                                                (MIN_INTERVAL_CYCLES);
-
-    // Линейное масштабирование от 0 до MAX_CODE_CYCLES
-    return ((uint32_t)code * MAX_CODE_CYCLES) / 1024;
-  }
-
-  // Расчет циклов для режима тестирования (аудио 48 кГц)
-  uint16_t calculateTestModeDelay(uint16_t code) {
-    // Общее число циклов на один фрейм при 48 кГц
-    static constexpr uint32_t CYCLES_PER_SAMPLE = PIO_FREQ / AUDIO_SAMPLE_RATE;
-    
-    // Базовая минимальная задержка
-    uint32_t base_cycles = MIN_INTERVAL_CYCLES;
-    
-    // Вычисляем задержку для текущего кода, используя оставшиеся циклы
-    // после вычета минимальных задержек и импульсов
-    uint32_t available_cycles = CYCLES_PER_SAMPLE - (MIN_INTERVAL_CYCLES * 2) - IMPULSE_CYCLES;
-    
-    // Масштабируем код в диапазон доступных циклов
-    return (uint32_t)((float)code / 1024 * available_cycles);
-  }
+  uint16_t currentCode;
+  bool testMode;
+  int8_t testDirection;
+  uint32_t testOutputCounter;
+  uint32_t testUpdateCounter;
+  float testUpdatePeriodSeconds;
 
 public:
-  PPMController() : pio(nullptr), sm(0), currentCode(0), testMode(false), 
-                    testDirection(1), testOutputCounter(0), 
-                    testUpdateCounter(0), testUpdatePeriodSeconds(0.1f), enableStats(false) {
-    // Инициализация времени для регулярной отправки фреймов
-    nextFrameTime = get_absolute_time();
-  }
+  PPMController()
+      : pio(nullptr), sm(0), currentCode(0), testMode(false), testDirection(1),
+        testOutputCounter(0), testUpdateCounter(0),
+        testUpdatePeriodSeconds(0.1f) {}
 
-  // Инициализация PIO для PPM
   void init() {
     pio = pio0;
     sm = 0;
-
     uint offset = pio_add_program(pio, &ppm_program);
     ppm_program_init(pio, sm, offset, PPM_PIN, PIO_FREQ);
   }
 
-  // Отправка кода в PPM
+  // Теперь просто сохраняем код, вычисления задержки вне класса
   void sendCode(uint16_t code) {
     if (code > 1024)
-      code = 1024; // Ограничение до 1024
-
+      code = 1024;
     currentCode = code;
+  }
 
-    // Расчет минимальной задержки
-    uint32_t min_gap_cycles = MIN_INTERVAL_CYCLES;
-    uint32_t code_cycles;
-
+  // Переименовано: update -> test_mode_update
+  void test_mode_update() {
+    static absolute_time_t next_test_update_time = {0};
     if (testMode) {
-      // В режиме тестирования используем логику из audio_ppm.c
-      code_cycles = calculateTestModeDelay(code) + min_gap_cycles;
-    } else {
-      // В обычном режиме используем стандартную логику
-      code_cycles = scaleCodeForFrame(code);
-    }
-    
-    // Отправляем значения для минимальной задержки и кода
-    send_ppm_code(pio, sm, min_gap_cycles, code_cycles);
-  }
-
-  // Метод для отправки фреймов с регулярным интервалом
-  void update() {
-    if (absolute_time_diff_us(get_absolute_time(), nextFrameTime) <= 0) {
-      // В режиме тестирования имитируем логику из audio_ppm.c
-      if (testMode) {
-        // Увеличиваем счётчик обновлений
-        testUpdateCounter++;
-        
-        // Расчет количества отсчетов, соответствующих заданному периоду
-        uint32_t samplesPerUpdate = (uint32_t)(testUpdatePeriodSeconds * AUDIO_SAMPLE_RATE);
-        
-        // Обновляем код после накопления нужного количества отсчетов
-        if (testUpdateCounter >= samplesPerUpdate) {
-          // Обновляем код
-          currentCode += testDirection;
-          testUpdateCounter = 0;
-          
-          // Изменение направления при достижении границ
-          if (currentCode >= 1023) {
-            testDirection = -1;
-          } else if (currentCode <= 1) {
-            testDirection = 1;
-          }
+      if (absolute_time_diff_us(get_absolute_time(), next_test_update_time) <= 0) {
+        currentCode += testDirection;
+        if (currentCode >= 1023) {
+          testDirection = -1;
+        } else if (currentCode <= 1) {
+          testDirection = 1;
         }
-        
-        // Выводим статистику, только если она включена
-        if (enableStats && (++testOutputCounter % 100 == 0)) {
-          uint32_t min_gap_cycles = MIN_INTERVAL_CYCLES;
-          uint32_t code_cycles = calculateTestModeDelay(currentCode);
-          
-          // Вычисляем разбиение на внешний/внутренний счётчики
-          uint32_t outer_min = min_gap_cycles / 32;
-          uint32_t inner_min = min_gap_cycles % 32;
-          uint32_t outer_code = code_cycles / 32;
-          uint32_t inner_code = code_cycles % 32;
-          
-          // Отправляем в терминал с форматированием
-          std::string stats = "\r\n[TEST] Code: " + std::to_string(currentCode) + 
-                              " / Min. cycles with compensation: " + std::to_string(MIN_INTERVAL_CYCLES) +
-                              " / Calculated pause: " + std::to_string(MIN_INTERVAL_CYCLES / 133.0f) + " us\r\n";
-          
-          tud_cdc_write(stats.c_str(), stats.length());
-          tud_cdc_write_flush();
-        }
-        
-        // Устанавливаем время следующего фрейма согласно частоте 48 кГц
-        nextFrameTime = make_timeout_time_us(AUDIO_FRAME_TIME_US);
-      } else {
-        // В обычном режиме используем стандартную частоту фреймов
-        nextFrameTime = make_timeout_time_us(FRAME_TIME_US);
+        next_test_update_time = make_timeout_time_ms((int)(testUpdatePeriodSeconds * 1000));
       }
-      
-      // Отправляем текущий код
-      sendCode(currentCode);
     }
   }
 
-  // Парсинг входной команды - поддерживает C/c и T/t и новые команды
   bool parseCommand(const std::string &cmd, uint16_t &code) {
     // Команда тест (T/t)
     if (cmd.length() == 1 && (cmd[0] == 'T' || cmd[0] == 't')) {
       testMode = !testMode;
-      
+
       if (testMode) {
         // При включении тестового режима сбросить счетчики
         currentCode = 0;
         testDirection = 1;
         testUpdateCounter = 0;
       }
-      
+
       code = testMode ? 1 : 0;
       return true;
     }
-    
-    // Команда включения/выключения статистики (S/s)
-    if (cmd.length() == 1 && (cmd[0] == 'S' || cmd[0] == 's')) {
-      enableStats = !enableStats;
-      code = enableStats ? 1 : 0;
-      return true;
-    }
-    
+
     // Команда установки периода обновления в секундах (P:число или p:число)
-    if (cmd.length() >= 3 && (cmd[0] == 'P' || cmd[0] == 'p') && cmd[1] == ':') {
+    if (cmd.length() >= 3 && (cmd[0] == 'P' || cmd[0] == 'p') &&
+        cmd[1] == ':') {
       try {
         float period = std::stof(cmd.substr(2));
         setTestUpdatePeriod(period);
@@ -200,9 +98,10 @@ public:
         return false;
       }
     }
-    
+
     // Обработка команды кода (C:число или c:число)
-    if (cmd.length() >= 3 && (cmd[0] == 'C' || cmd[0] == 'c') && cmd[1] == ':') {
+    if (cmd.length() >= 3 && (cmd[0] == 'C' || cmd[0] == 'c') &&
+        cmd[1] == ':') {
       try {
         code = std::stoi(cmd.substr(2));
         return true;
@@ -210,33 +109,50 @@ public:
         return false;
       }
     }
-    
+
     return false;
   }
-  
-  // Установка периода обновления кода в тестовом режиме (в секундах)
+
   void setTestUpdatePeriod(float seconds) {
-    if (seconds > 0.01f) {  // Минимальный период 10 мс
+    if (seconds > 0.01f) {
       testUpdatePeriodSeconds = seconds;
-      // Сбрасываем счетчик при изменении периода
       testUpdateCounter = 0;
     }
   }
 
-  // Геттеры
   bool isTestMode() const { return testMode; }
   uint16_t getCurrentCode() const { return currentCode; }
   float getTestUpdatePeriod() const { return testUpdatePeriodSeconds; }
-  bool isStatsEnabled() const { return enableStats; }
 };
 
-#define LED_TIME 500
+// Глобальные переменные для таймеров
+alarm_id_t audio_timer_id = 0;
+alarm_id_t delay_timer_id = 0;
+volatile uint32_t next_delay_ticks = 0;
+
+// PIO и SM для импульсов
+PIO ppm_pio = nullptr;
+uint ppm_sm = 0;
+
+// функция формирования короткого импульса через PIO
+void ppm_pulse() { send_ppm_pulse(ppm_pio, ppm_sm); }
+
+int64_t delay_timer_callback(alarm_id_t id, void *user_data) {
+  ppm_pulse();
+  return 0;
+}
+
+int64_t audio_timer_callback(alarm_id_t id, void *user_data) {
+  ppm_pulse();
+  if (next_delay_ticks > 0) {
+    delay_timer_id =
+        add_alarm_in_us(next_delay_ticks, delay_timer_callback, NULL, false);
+  }
+  return (int64_t)(1000000 / PPMController::AUDIO_SAMPLE_RATE);
+}
 
 int main() {
-  // Установить системную частоту 133 МГц для корректной работы PIO
   set_sys_clock_khz(133000, true);
-
-  // Initialize TinyUSB stack
   board_init();
   tusb_init();
 
@@ -246,38 +162,42 @@ int main() {
   static uint8_t led_state = 0;
   absolute_time_t next_led_toggle_time = make_timeout_time_ms(LED_TIME);
 
-  // TinyUSB board init callback after init
   if (board_init_after_tusb) {
     board_init_after_tusb();
   }
-
-  // let pico sdk use the CDC interface for std io
   stdio_init_all();
 
-  // Создаем объект контроллера PPM
   PPMController ppmCtrl;
-  ppmCtrl.init();  // без параметра калибровки
+  ppmCtrl.init();
 
-  // Отправляем начальный код (нулевой)
+  // Сохраняем PIO и SM для использования в прерываниях
+  ppm_pio = pio0;
+  ppm_sm = 0;
+
   ppmCtrl.sendCode(0);
 
-  // Буфер для накопления команды до нажатия Enter
+  audio_timer_id = add_alarm_in_us(1000000 / PPMController::AUDIO_SAMPLE_RATE,
+                                   audio_timer_callback, NULL, true);
+
   std::string command_buffer;
-  
+
   while (true) {
-    tud_task(); // USB
+    tud_task();
+    ppmCtrl.test_mode_update();
 
-    // Регулярная отправка PPM фреймов
-    ppmCtrl.update();
-
-    // Неблокирующее мигание светодиодом
     if (absolute_time_diff_us(get_absolute_time(), next_led_toggle_time) <= 0) {
       led_state = !led_state;
       gpio_put(LED_PIN, led_state);
       next_led_toggle_time = make_timeout_time_ms(LED_TIME);
     }
 
-    // Обработка USB CDC
+    uint32_t delay_ticks = 0;
+    {
+      uint16_t code = ppmCtrl.getCurrentCode();
+      delay_ticks = PPMController::MIN_INTERVAL_CYCLES + code;
+    }
+    next_delay_ticks = delay_ticks;
+
     if (tud_cdc_connected()) {
       if (tud_cdc_available()) {
         uint8_t buf[64];
@@ -291,7 +211,7 @@ int main() {
           // Обработка входных символов
           for (uint32_t i = 0; i < count; i++) {
             char c = static_cast<char>(buf[i]);
-            
+
             // Проверяем, нажат ли Enter
             if (c == '\r' || c == '\n') {
               // Обрабатываем команду, если буфер не пустой
@@ -301,50 +221,46 @@ int main() {
                   // Проверяем тип команды
                   if (command_buffer[0] == 'T' || command_buffer[0] == 't') {
                     // Команда режима тестирования
-                    std::string mode = ppmCtrl.isTestMode() ? "включен" : "выключен";
-                    std::string response = "\r\nРежим тестирования " + mode + "\r\n";
+                    std::string mode =
+                        ppmCtrl.isTestMode() ? "включен" : "выключен";
+                    std::string response =
+                        "\r\nРежим тестирования " + mode + "\r\n";
                     tud_cdc_write(response.c_str(), response.length());
                     tud_cdc_write_flush();
-                  } 
-                  else if (command_buffer[0] == 'S' || command_buffer[0] == 's') {
-                    // Команда включения/выключения статистики
-                    std::string mode = ppmCtrl.isStatsEnabled() ? "включена" : "выключена";
-                    std::string response = "\r\nСтатистика " + mode + "\r\n";
-                    tud_cdc_write(response.c_str(), response.length());
-                    tud_cdc_write_flush();
-                  }
-                  else if (command_buffer[0] == 'P' || command_buffer[0] == 'p') {
+                  } else if (command_buffer[0] == 'P' ||
+                             command_buffer[0] == 'p') {
                     // Команда установки периода обновления
-                    std::string response = "\r\nПериод обновления установлен: " + 
-                                          std::to_string(ppmCtrl.getTestUpdatePeriod()) + " сек\r\n";
+                    std::string response =
+                        "\r\nПериод обновления установлен: " +
+                        std::to_string(ppmCtrl.getTestUpdatePeriod()) +
+                        " сек\r\n";
                     tud_cdc_write(response.c_str(), response.length());
                     tud_cdc_write_flush();
-                  }
-                  else {
+                  } else {
                     // Обычная команда кода
                     ppmCtrl.sendCode(code);
-                    std::string response = "\r\nPPM code sent: " + std::to_string(code) + "\r\n";
+                    std::string response =
+                        "\r\nPPM code sent: " + std::to_string(code) + "\r\n";
                     tud_cdc_write(response.c_str(), response.length());
                     tud_cdc_write_flush();
                   }
                 } else {
                   // Если команда не распознана
-                  std::string error = "\r\nНераспознанная команда: " + command_buffer + "\r\n";
+                  std::string error =
+                      "\r\nНераспознанная команда: " + command_buffer + "\r\n";
                   tud_cdc_write(error.c_str(), error.length());
                   tud_cdc_write_flush();
                 }
-                
+
                 // Очищаем буфер после обработки команды
                 command_buffer.clear();
               }
-            } 
-            else if (c == 127 || c == 8) {
+            } else if (c == 127 || c == 8) {
               // Обработка Backspace или Delete
               if (!command_buffer.empty()) {
                 command_buffer.pop_back();
               }
-            }
-            else {
+            } else {
               // Добавляем символ в буфер
               command_buffer.push_back(c);
             }
