@@ -14,6 +14,7 @@
 #include "ppm.pio.h"
 
 #define LED_TIME 500
+#define MAX_CODE 1024
 class PPMController {
 public:
   static constexpr uint16_t MIN_PULSE_PERIOD_US = 3;
@@ -49,8 +50,8 @@ public:
 
   // Теперь просто сохраняем код, вычисления задержки вне класса
   void sendCode(uint16_t code) {
-    if (code > 1024)
-      code = 1024;
+    if (code > MAX_CODE)
+      code = MAX_CODE;
     currentCode = code;
   }
 
@@ -58,14 +59,16 @@ public:
   void test_mode_update() {
     static absolute_time_t next_test_update_time = {0};
     if (testMode) {
-      if (absolute_time_diff_us(get_absolute_time(), next_test_update_time) <= 0) {
+      if (absolute_time_diff_us(get_absolute_time(), next_test_update_time) <=
+          0) {
         currentCode += testDirection;
-        if (currentCode >= 1023) {
+        if (currentCode >= MAX_CODE - 1) {
           testDirection = -1;
         } else if (currentCode <= 1) {
           testDirection = 1;
         }
-        next_test_update_time = make_timeout_time_ms((int)(testUpdatePeriodSeconds * 1000));
+        next_test_update_time =
+            make_timeout_time_ms((int)(testUpdatePeriodSeconds * 1000));
       }
     }
   }
