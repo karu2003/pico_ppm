@@ -20,7 +20,7 @@ public:
   static constexpr uint16_t MIN_PULSE_PERIOD_US = 3;
   static constexpr float PIO_FREQ = 133000000.0f;
   static constexpr uint16_t MIN_INTERVAL_CYCLES = MIN_PULSE_PERIOD_US * 133;
-  static constexpr uint32_t AUDIO_SAMPLE_RATE = 48000;
+  static constexpr uint32_t AUDIO_SAMPLE_RATE = 50000;
   static constexpr uint32_t AUDIO_FRAME_TIME_US = 1000000 / AUDIO_SAMPLE_RATE;
 
 private:
@@ -141,7 +141,7 @@ uint ppm_sm = 0;
 void ppm_pulse() { send_ppm_pulse(ppm_pio, ppm_sm); }
 
 int64_t delay_timer_callback(alarm_id_t id, void *user_data) {
-  ppm_pulse();
+  // ppm_pulse();
   return 0;
 }
 
@@ -151,7 +151,7 @@ int64_t audio_timer_callback(alarm_id_t id, void *user_data) {
     delay_timer_id =
         add_alarm_in_us(next_delay_ticks, delay_timer_callback, NULL, false);
   }
-  return (int64_t)(1000000 / PPMController::AUDIO_SAMPLE_RATE);
+  return PPMController::AUDIO_FRAME_TIME_US;
 }
 
 int main() {
