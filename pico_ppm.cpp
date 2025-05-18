@@ -4,7 +4,9 @@
 #include <string>
 
 #include "hardware/clocks.h"
+#include "hardware/irq.h"
 #include "hardware/pio.h"
+#include "hardware/structs/timer.h"
 #include "hardware/timer.h"
 #include "pico/stdlib.h"
 #include <bsp/board_api.h>
@@ -15,13 +17,16 @@
 
 #define LED_TIME 500
 #define MAX_CODE 1024
+#define SYS_FREQ 133000
 class PPMController {
 public:
-  static constexpr uint16_t MIN_PULSE_PERIOD_US = 3;
-  static constexpr float PIO_FREQ = 133000000.0f;
-  static constexpr uint16_t MIN_INTERVAL_CYCLES = MIN_PULSE_PERIOD_US * 133;
-  static constexpr uint32_t AUDIO_SAMPLE_RATE = 50000;
-  static constexpr uint32_t AUDIO_FRAME_TIME_US = 1000000 / AUDIO_SAMPLE_RATE;
+  static constexpr float MIN_PULSE_PERIOD_US = 3.0f;    // 3.0 microseconds
+  static constexpr float PIO_FREQ = SYS_FREQ * 1000.0f; // 133000000.0f;
+  static constexpr uint16_t MIN_INTERVAL_CYCLES =
+      MIN_PULSE_PERIOD_US * (SYS_FREQ / 1000);
+  static constexpr float AUDIO_SAMPLE_RATE = 50000.0f; // 50 kHz
+  static constexpr uint32_t AUDIO_FRAME_TICKS =
+      SYS_FREQ * 10.0 / AUDIO_SAMPLE_RATE;
 
 private:
   static constexpr uint8_t PPM_PIN = 0;
@@ -34,6 +39,7 @@ private:
   uint32_t testOutputCounter;
   uint32_t testUpdateCounter;
   float testUpdatePeriodSeconds;
+  uint32_t audio_sample_ticks;
 
 public:
   PPMController()
@@ -137,25 +143,45 @@ volatile uint32_t next_delay_ticks = 0;
 PIO ppm_pio = nullptr;
 uint ppm_sm = 0;
 
-// функция формирования короткого импульса через PIO
+// Указатель на PPMController для использования в прерываниях
+PPMController *ppm_controller = nullptr;
+
+// Функция формирования короткого импульса через PIO
 void ppm_pulse() { send_ppm_pulse(ppm_pio, ppm_sm); }
 
-int64_t delay_timer_callback(alarm_id_t id, void *user_data) {
-  // ppm_pulse();
-  return 0;
+// Обработчик прерывания таймера для первого импульса (AUDIO_SAMPLE_RATE)
+void timer0_irq_handler() {
+  if (timer_hw->intr & (1u << 0)) {
+    timer_hw->intr = 1u << 0;
+
+    ppm_pulse();
+
+    // Вычисляем задержку для второго импульса на основе текущего кода
+    uint32_t delay_ticks = PPMController::MIN_INTERVAL_CYCLES; // временно увеличьте задержку
+    // if (ppm_controller) {
+    //   delay_ticks += ppm_controller->getCurrentCode();
+    // }
+
+    // if (delay_ticks > 0) {
+      // hw_clear_bits(&timer_hw->armed, 1u << 1);
+      timer_hw->alarm[1] = timer_hw->timerawl + 3; //delay_ticks;
+      // hw_set_bits(&timer_hw->armed, 1u << 1);
+    // }
+
+    timer_hw->alarm[0] = timer_hw->timerawl + PPMController::AUDIO_FRAME_TICKS;
+  }
 }
 
-int64_t audio_timer_callback(alarm_id_t id, void *user_data) {
-  ppm_pulse();
-  if (next_delay_ticks > 0) {
-    delay_timer_id =
-        add_alarm_in_us(next_delay_ticks, delay_timer_callback, NULL, false);
+// Обработчик прерывания таймера для второго импульса
+void timer1_irq_handler() {
+  if (timer_hw->intr & (1u << 1)) {
+    timer_hw->intr = 1u << 1; // Сбрасываем флаг прерывания
+    ppm_pulse();              // Формируем второй импульс
   }
-  return PPMController::AUDIO_FRAME_TIME_US;
 }
 
 int main() {
-  set_sys_clock_khz(133000, true);
+  set_sys_clock_khz(SYS_FREQ, true);
   board_init();
   tusb_init();
 
@@ -172,6 +198,7 @@ int main() {
 
   PPMController ppmCtrl;
   ppmCtrl.init();
+  ppm_controller = &ppmCtrl; // Сохраняем для использования в прерываниях
 
   // Сохраняем PIO и SM для использования в прерываниях
   ppm_pio = pio0;
@@ -179,8 +206,14 @@ int main() {
 
   ppmCtrl.sendCode(0);
 
-  audio_timer_id = add_alarm_in_us(1000000 / PPMController::AUDIO_SAMPLE_RATE,
-                                   audio_timer_callback, NULL, true);
+  irq_set_exclusive_handler(TIMER_IRQ_0, timer0_irq_handler);
+  irq_set_exclusive_handler(TIMER_IRQ_1, timer1_irq_handler);
+
+  hw_set_bits(&timer_hw->inte, (1u << 0) | (1u << 1));
+  irq_set_enabled(TIMER_IRQ_0, true);
+  irq_set_enabled(TIMER_IRQ_1, true);
+
+  timer_hw->alarm[0] = timer_hw->timerawl + PPMController::AUDIO_FRAME_TICKS;
 
   std::string command_buffer;
 
