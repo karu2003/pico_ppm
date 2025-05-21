@@ -45,7 +45,7 @@ public:
   PPMController()
       : pio(nullptr), sm(0), currentCode(0), testMode(false), testDirection(1),
         testOutputCounter(0), testUpdateCounter(0),
-        testUpdatePeriodSeconds(0.1f) {}
+        testUpdatePeriodSeconds(0.01f) {}
 
   void init() {
     pio = pio0;
@@ -54,28 +54,32 @@ public:
     ppm_program_init(pio, sm, offset, PPM_PIN, PIO_FREQ);
   }
 
-  // Теперь просто сохраняем код, вычисления задержки вне класса
   void sendCode(uint16_t code) {
     if (code > MAX_CODE)
       code = MAX_CODE;
     currentCode = code;
   }
 
-  // Переименовано: update -> test_mode_update
   void test_mode_update() {
     static absolute_time_t next_test_update_time = {0};
     if (testMode) {
       if (absolute_time_diff_us(get_absolute_time(), next_test_update_time) <=
           0) {
+
         currentCode += testDirection;
+
         if (currentCode >= MAX_CODE - 1) {
+          currentCode = MAX_CODE - 1;
           testDirection = -1;
         } else if (currentCode <= 1) {
+          currentCode = 1;
           testDirection = 1;
         }
-        next_test_update_time =
-            make_timeout_time_ms((int)(testUpdatePeriodSeconds * 1000));
+        int update_ms = (int)(testUpdatePeriodSeconds * 1000.0f);
+        next_test_update_time = make_timeout_time_ms(update_ms);
       }
+    } else {
+      next_test_update_time = get_absolute_time();
     }
   }
 
@@ -134,10 +138,8 @@ public:
   float getTestUpdatePeriod() const { return testUpdatePeriodSeconds; }
 };
 
-// Глобальные переменные для таймеров
+// Глобальные переменные для таймера
 alarm_id_t audio_timer_id = 0;
-alarm_id_t delay_timer_id = 0;
-volatile uint32_t next_delay_ticks = 0;
 
 // PIO и SM для импульсов
 PIO ppm_pio = nullptr;
@@ -146,37 +148,23 @@ uint ppm_sm = 0;
 // Указатель на PPMController для использования в прерываниях
 PPMController *ppm_controller = nullptr;
 
-// Функция формирования короткого импульса через PIO
-void ppm_pulse() { send_ppm_pulse(ppm_pio, ppm_sm); }
+// Функция отправки значения в PIO (передаем текущий код задержки)
+void send_ppm_value(uint32_t value) {
+  if (ppm_pio != nullptr) {
+    pio_sm_put_blocking(ppm_pio, ppm_sm, value);
+  }
+}
 
-// Обработчик прерывания таймера для первого импульса (AUDIO_SAMPLE_RATE)
 void timer0_irq_handler() {
   if (timer_hw->intr & (1u << 0)) {
     timer_hw->intr = 1u << 0;
 
-    ppm_pulse();
-
-    // Вычисляем задержку для второго импульса на основе текущего кода
-    uint32_t delay_ticks = PPMController::MIN_INTERVAL_CYCLES; // временно увеличьте задержку
-    // if (ppm_controller) {
-    //   delay_ticks += ppm_controller->getCurrentCode();
-    // }
-
-    // if (delay_ticks > 0) {
-      // hw_clear_bits(&timer_hw->armed, 1u << 1);
-      timer_hw->alarm[1] = timer_hw->timerawl + 3; //delay_ticks;
-      // hw_set_bits(&timer_hw->armed, 1u << 1);
-    // }
-
+    uint32_t delay_value = PPMController::MIN_INTERVAL_CYCLES;
+    if (ppm_controller) {
+      delay_value += ppm_controller->getCurrentCode();
+    }
+    send_ppm_value(delay_value);
     timer_hw->alarm[0] = timer_hw->timerawl + PPMController::AUDIO_FRAME_TICKS;
-  }
-}
-
-// Обработчик прерывания таймера для второго импульса
-void timer1_irq_handler() {
-  if (timer_hw->intr & (1u << 1)) {
-    timer_hw->intr = 1u << 1; // Сбрасываем флаг прерывания
-    ppm_pulse();              // Формируем второй импульс
   }
 }
 
@@ -207,11 +195,9 @@ int main() {
   ppmCtrl.sendCode(0);
 
   irq_set_exclusive_handler(TIMER_IRQ_0, timer0_irq_handler);
-  irq_set_exclusive_handler(TIMER_IRQ_1, timer1_irq_handler);
 
-  hw_set_bits(&timer_hw->inte, (1u << 0) | (1u << 1));
+  hw_set_bits(&timer_hw->inte, (1u << 0));
   irq_set_enabled(TIMER_IRQ_0, true);
-  irq_set_enabled(TIMER_IRQ_1, true);
 
   timer_hw->alarm[0] = timer_hw->timerawl + PPMController::AUDIO_FRAME_TICKS;
 
@@ -226,13 +212,6 @@ int main() {
       gpio_put(LED_PIN, led_state);
       next_led_toggle_time = make_timeout_time_ms(LED_TIME);
     }
-
-    uint32_t delay_ticks = 0;
-    {
-      uint16_t code = ppmCtrl.getCurrentCode();
-      delay_ticks = PPMController::MIN_INTERVAL_CYCLES + code;
-    }
-    next_delay_ticks = delay_ticks;
 
     if (tud_cdc_connected()) {
       if (tud_cdc_available()) {

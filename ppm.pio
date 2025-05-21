@@ -1,26 +1,21 @@
-// Минимальная PIO-программа для формирования одиночного короткого импульса PPM
+// Минимальная PIO-программа для формирования PPM
 .program ppm
 .side_set 1
 
-; .wrap_target
-;     // Ждем команду (pull) для формирования импульса
-;     pull block      side 0
-;     nop             side 1
-;     nop             side 0
-
-; .wrap
-
 .wrap_target
-    // Ждем команду (pull)
-    pull block      side 0    // Считываем данные, выход в 0
-    
-    // Формируем 5-тактовый импульс с помощью цикла
-    set x, 5        side 1    // Инициализация счетчика, первый такт импульса
-pulse_loop:
-    jmp x-- pulse_loop side 1 // Счетчик 8→0 = 9 итераций, еще 9 тактов импульса
-    
-    // Завершение импульса
-    nop             side 0    // Сброс выхода в 0
+
+    pull block       side 0
+    mov x, osr       side 0
+
+    set pins, 1      side 1
+    set pins, 0      side 0
+
+pause:
+    jmp x--, pause   side 0
+
+    set pins, 1      side 1
+    set pins, 0      side 0
+
 .wrap
 
 % c-sdk {
