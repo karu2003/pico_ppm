@@ -18,13 +18,14 @@
 #define LED_TIME 500
 #define MAX_CODE 1024
 #define SYS_FREQ 133000
+// #define SYS_FREQ 250000
 class PPMController {
 public:
   static constexpr float MIN_PULSE_PERIOD_US = 3.0f;    // 3.0 microseconds
   static constexpr float PIO_FREQ = SYS_FREQ * 1000.0f; // 133000000.0f;
   static constexpr uint16_t MIN_INTERVAL_CYCLES =
       MIN_PULSE_PERIOD_US * (SYS_FREQ / 1000);
-  static constexpr float AUDIO_SAMPLE_RATE = 50000.0f; // 50 kHz
+  static constexpr float AUDIO_SAMPLE_RATE = 48000.0f; // 50 kHz
   static constexpr uint32_t AUDIO_FRAME_TICKS =
       SYS_FREQ * 10.0 / AUDIO_SAMPLE_RATE;
 
@@ -45,7 +46,7 @@ public:
   PPMController()
       : pio(nullptr), sm(0), currentCode(0), testMode(false), testDirection(1),
         testOutputCounter(0), testUpdateCounter(0),
-        testUpdatePeriodSeconds(0.01f) {}
+        testUpdatePeriodSeconds(0.001f) {}
 
   void init() {
     pio = pio0;
