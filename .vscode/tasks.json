@@ -36,7 +36,7 @@
             }
         },
         {
-            "label": "Flash",
+            "label": "Flash ENCODER (SWD)",
             "type": "process",
             "command": "${userHome}/.pico-sdk/openocd/0.12.0+dev/openocd.exe",
             "args": [
@@ -45,13 +45,32 @@
                 "-f",
                 "interface/cmsis-dap.cfg",
                 "-f",
-                "target/${command:raspberry-pi-pico.getTarget}.cfg",
+                "target/rp2040.cfg",
                 "-c",
-                "adapter speed 5000; program \"${command:raspberry-pi-pico.launchTargetPath}\" verify reset exit"
+                "adapter speed 5000; program \"${workspaceFolder}/build/ppm_enc/ppm_enc.elf\" verify reset exit"
             ],
             "problemMatcher": [],
             "windows": {
-                "command": "${env:USERPROFILE}/.pico-sdk/openocd/0.12.0+dev/openocd.exe",
+                "command": "${env:USERPROFILE}/.pico-sdk/openocd/0.12.0+dev/openocd.exe"
+            }
+        },
+        {
+            "label": "Flash DECODER (SWD)",
+            "type": "process",
+            "command": "${userHome}/.pico-sdk/openocd/0.12.0+dev/openocd.exe",
+            "args": [
+                "-s",
+                "${userHome}/.pico-sdk/openocd/0.12.0+dev/scripts",
+                "-f",
+                "interface/cmsis-dap.cfg",
+                "-f",
+                "target/rp2040.cfg",
+                "-c",
+                "adapter speed 5000; program \"${workspaceFolder}/build/ppm_dec/ppm_dec.elf\" verify reset exit"
+            ],
+            "problemMatcher": [],
+            "windows": {
+                "command": "${env:USERPROFILE}/.pico-sdk/openocd/0.12.0+dev/openocd.exe"
             }
         }
     ]

@@ -13,7 +13,7 @@
 #include <pico/stdio.h>
 #include <tusb.h>
 
-#include "ppm.pio.h"
+#include "dec.pio.h"
 
 #define LED_TIME 500
 #define MAX_CODE 1024
@@ -90,7 +90,6 @@ public:
       testMode = !testMode;
 
       if (testMode) {
-        // При включении тестового режима сбросить счетчики
         currentCode = 0;
         testDirection = 1;
         testUpdateCounter = 0;
@@ -100,7 +99,6 @@ public:
       return true;
     }
 
-    // Команда установки периода обновления в секундах (P:число или p:число)
     if (cmd.length() >= 3 && (cmd[0] == 'P' || cmd[0] == 'p') &&
         cmd[1] == ':') {
       try {
@@ -113,7 +111,6 @@ public:
       }
     }
 
-    // Обработка команды кода (C:число или c:число)
     if (cmd.length() >= 3 && (cmd[0] == 'C' || cmd[0] == 'c') &&
         cmd[1] == ':') {
       try {
@@ -139,17 +136,13 @@ public:
   float getTestUpdatePeriod() const { return testUpdatePeriodSeconds; }
 };
 
-// Глобальные переменные для таймера
 alarm_id_t audio_timer_id = 0;
 
-// PIO и SM для импульсов
 PIO ppm_pio = nullptr;
 uint ppm_sm = 0;
 
-// Указатель на PPMController для использования в прерываниях
 PPMController *ppm_controller = nullptr;
 
-// Функция отправки значения в PIO (передаем текущий код задержки)
 void send_ppm_value(uint32_t value) {
   if (ppm_pio != nullptr) {
     pio_sm_put_blocking(ppm_pio, ppm_sm, value);
@@ -187,9 +180,8 @@ int main() {
 
   PPMController ppmCtrl;
   ppmCtrl.init();
-  ppm_controller = &ppmCtrl; // Сохраняем для использования в прерываниях
+  ppm_controller = &ppmCtrl;
 
-  // Сохраняем PIO и SM для использования в прерываниях
   ppm_pio = pio0;
   ppm_sm = 0;
 
@@ -220,23 +212,21 @@ int main() {
         uint32_t count = tud_cdc_read(buf, sizeof(buf));
 
         if (count > 0) {
-          // Эхо данных
+
           tud_cdc_write(buf, count);
           tud_cdc_write_flush();
 
-          // Обработка входных символов
           for (uint32_t i = 0; i < count; i++) {
             char c = static_cast<char>(buf[i]);
 
-            // Проверяем, нажат ли Enter
             if (c == '\r' || c == '\n') {
-              // Обрабатываем команду, если буфер не пустой
+
               if (!command_buffer.empty()) {
                 uint16_t code;
                 if (ppmCtrl.parseCommand(command_buffer, code)) {
-                  // Проверяем тип команды
+
                   if (command_buffer[0] == 'T' || command_buffer[0] == 't') {
-                    // Команда режима тестирования
+
                     std::string mode =
                         ppmCtrl.isTestMode() ? "включен" : "выключен";
                     std::string response =
@@ -245,7 +235,7 @@ int main() {
                     tud_cdc_write_flush();
                   } else if (command_buffer[0] == 'P' ||
                              command_buffer[0] == 'p') {
-                    // Команда установки периода обновления
+
                     std::string response =
                         "\r\nПериод обновления установлен: " +
                         std::to_string(ppmCtrl.getTestUpdatePeriod()) +
@@ -253,7 +243,7 @@ int main() {
                     tud_cdc_write(response.c_str(), response.length());
                     tud_cdc_write_flush();
                   } else {
-                    // Обычная команда кода
+
                     ppmCtrl.sendCode(code);
                     std::string response =
                         "\r\nPPM code sent: " + std::to_string(code) + "\r\n";
@@ -261,32 +251,31 @@ int main() {
                     tud_cdc_write_flush();
                   }
                 } else {
-                  // Если команда не распознана
+
                   std::string error =
                       "\r\nНераспознанная команда: " + command_buffer + "\r\n";
                   tud_cdc_write(error.c_str(), error.length());
                   tud_cdc_write_flush();
                 }
 
-                // Очищаем буфер после обработки команды
                 command_buffer.clear();
               }
             } else if (c == 127 || c == 8) {
-              // Обработка Backspace или Delete
+
               if (!command_buffer.empty()) {
                 command_buffer.pop_back();
               }
             } else {
-              // Добавляем символ в буфер
+
               command_buffer.push_back(c);
             }
           }
         }
       }
     } else {
-      // Небольшая пауза при отсутствии подключения
+
       sleep_ms(10);
-      command_buffer.clear(); // Очистить буфер, если соединение пропало
+      command_buffer.clear();
     }
   }
 

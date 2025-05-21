@@ -1,4 +1,3 @@
-// Минимальная PIO-программа для формирования PPM
 .program ppm
 .side_set 1
 
@@ -19,7 +18,6 @@ pause:
 .wrap
 
 % c-sdk {
-// Инициализация PIO для PPM (без изменений)
 static inline void ppm_program_init(PIO pio, uint sm, uint offset, uint pin, float freq) {
     pio_sm_config c = ppm_program_get_default_config(offset);
 
@@ -28,7 +26,7 @@ static inline void ppm_program_init(PIO pio, uint sm, uint offset, uint pin, flo
 
     sm_config_set_set_pins(&c, pin, 1);
     sm_config_set_sideset_pins(&c, pin);
-    sm_config_set_sideset(&c, 1, false, false);  // 1-bit side-set, optional
+    sm_config_set_sideset(&c, 1, false, false);  
 
     // Установить делитель частоты для PIO
     sm_config_set_clkdiv(&c, (float)clock_get_hz(clk_sys) / freq);
@@ -41,7 +39,6 @@ static inline void ppm_program_init(PIO pio, uint sm, uint offset, uint pin, flo
     pio_sm_set_enabled(pio, sm, true);
 }
 
-// Отправка одиночного импульса (теперь просто отправляем любое значение для запуска)
 static inline void send_ppm_pulse(PIO pio, uint sm) {
     pio_sm_put_blocking(pio, sm, 0);
 }

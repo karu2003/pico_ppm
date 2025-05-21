@@ -1,0 +1,45 @@
+.program ppm
+.side_set 1
+
+.wrap_target
+
+    pull block       side 0
+    mov x, osr       side 0
+
+    set pins, 1      side 1
+    set pins, 0      side 0
+
+pause:
+    jmp x--, pause   side 0
+
+    set pins, 1      side 1
+    set pins, 0      side 0
+
+.wrap
+
+% c-sdk {
+static inline void ppm_program_init(PIO pio, uint sm, uint offset, uint pin, float freq) {
+    pio_sm_config c = ppm_program_get_default_config(offset);
+
+    pio_gpio_init(pio, pin);
+    pio_sm_set_consecutive_pindirs(pio, sm, pin, 1, true);
+
+    sm_config_set_set_pins(&c, pin, 1);
+    sm_config_set_sideset_pins(&c, pin);
+    sm_config_set_sideset(&c, 1, false, false);  
+
+    // Установить делитель частоты для PIO
+    sm_config_set_clkdiv(&c, (float)clock_get_hz(clk_sys) / freq);
+
+    // Настройка FIFO для более эффективной передачи
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
+
+    // Применение конфигурации и запуск
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+
+static inline void send_ppm_pulse(PIO pio, uint sm) {
+    pio_sm_put_blocking(pio, sm, 0);
+}
+%}
