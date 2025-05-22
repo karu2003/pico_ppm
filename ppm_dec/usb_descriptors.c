@@ -100,8 +100,8 @@ enum {
 char const *string_desc_arr[] = {
     // switched because board is little endian
     (const char[]) { 0x09, 0x04 },  // 0: supported language is English (0x0409)
-    "ka_ru",                 // 1: Manufacturer
-    "Pico PPM",                    // 2: Product
+    "ppm_dec",                 // 1: Manufacturer
+    "PPM_decoder",                    // 2: Product
     NULL,                           // 3: Serials (null so it uses unique ID if available)
     "Audio PPM",           // 4: CDC Interface
     "PPMReset"                      // 5: Reset Interface
